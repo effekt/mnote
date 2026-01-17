@@ -12,11 +12,14 @@ See `docs/plans/2026-01-17-architecture-design.md` for the complete design.
 
 **Core principle:** "The sheet is a spatial index. The music lives in a semantic model."
 
-**Layer separation:**
-- Input (Flutter) → Interpretation (Pure Dart) → Commands → Music Model → Layout → Playback
-- Interpretation never mutates the score directly
-- All mutations go through reversible Commands
-- Layout is always derived from ticks, never stored
+**7 Layers:**
+1. Input (Flutter) - stylus/touch capture
+2. Interpretation (Pure Dart) - stroke → intent
+3. Commands - reversible score mutations
+4. Music Model - Score, Note, Measure, Segment
+5. Layout - tick → pixel conversion
+6. Playback - MIDI synthesis, cursor sync
+7. Selection - ephemeral UI state
 
 ## Commands
 
@@ -41,9 +44,12 @@ dart format .
 
 1. **Interpretation never mutates the score** - only Commands do
 2. **Commands reference IDs, not objects** - for serialization safety
-3. **Layout is derived, never stored** - the score knows ticks, not pixels
-4. **Playback reads, never writes** - no playback-induced state corruption
-5. **480 ticks per quarter note** - industry standard timing
+3. **Commands return created IDs** - for follow-up operations
+4. **Layout is derived, never stored** - the score knows ticks, not pixels
+5. **Playback reads, never writes** - no playback-induced state corruption
+6. **Selection is UI state only** - not undoable, not persisted
+7. **Wall-clock timing for playback** - never increment ticks in a timer
+8. **480 ticks per quarter note** - industry standard timing
 
 ## Code Organization
 
@@ -54,6 +60,7 @@ lib/
 ├── commands/          # Reversible score mutations
 ├── layout/            # Tick → pixel conversion
 ├── playback/          # MIDI event generation, cursor sync
+├── selection/         # UI selection state, hit testing
 └── ui/                # Flutter widgets, CustomPainter rendering
 ```
 
