@@ -263,6 +263,19 @@ class Pitch {
   final int octave;      // 0-9 (middle C = octave 4)
 }
 
+// Notated pitch (separates meaning from display)
+class NotatedPitch {
+  final Pitch pitch;
+  final AccidentalDisplay display;  // How to show accidental
+}
+
+enum AccidentalDisplay {
+  none,       // Implied by key signature
+  show,       // Explicitly shown
+  courtesy,   // Cautionary (parenthesized)
+  editorial,  // Editor-added (bracketed)
+}
+
 // Playback pitch
 class PlaybackPitch {
   final int midiPitch;   // 0-127
@@ -270,22 +283,58 @@ class PlaybackPitch {
 }
 ```
 
-Dual representation preserves enharmonic spelling (C# vs Db).
+Three-way representation:
+- `Pitch` = semantic meaning (C# in any context)
+- `NotatedPitch` = how to engrave it (with/without accidental)
+- `PlaybackPitch` = what to play (MIDI 61)
+
+### Duration Representation
+
+```dart
+// Written duration (for notation)
+class WrittenDuration {
+  final NoteValue base;      // whole, half, quarter, eighth, 16th, etc.
+  final int dots;            // 0-3 augmentation dots
+  final TupletRef? tuplet;   // Reference to tuplet group if applicable
+}
+
+class TupletRef {
+  final TupletId id;
+  final int actual;          // e.g., 3 (in 3:2)
+  final int normal;          // e.g., 2 (in 3:2)
+}
+
+enum NoteValue { whole, half, quarter, eighth, sixteenth, thirtySecond, sixtyFourth }
+```
+
+Two durations per note:
+- `WrittenDuration` = rhythmic spelling (dotted quarter in 3:2 tuplet)
+- `TickDuration` (int) = actual playback length in ticks
 
 ### Core Elements
 
 ```dart
 class Note {
   final NoteId id;
-  final Pitch pitch;
+  final NotatedPitch pitch;           // Includes accidental display
   final PlaybackPitch playbackPitch;
-  final Duration duration;
+  final WrittenDuration written;      // Rhythmic spelling
+  final TickPosition playbackDuration; // Actual ticks
   final int voice;
   final int staff;
   final int velocity;
   final List<Articulation> articulations;
   final TieId? tieStart;
   final TieId? tieEnd;
+}
+
+class Chord {
+  final ChordId id;
+  final List<NotatedPitch> pitches;   // Multiple notes, shared duration
+  final WrittenDuration written;
+  final TickPosition playbackDuration;
+  final int voice;
+  final int staff;
 }
 
 class Measure {
@@ -296,15 +345,20 @@ class Measure {
   final TimeSignature? timeSignature;  // Only if changed
   final KeySignature? keySignature;    // Only if changed
   final List<Segment> segments;
+  final Set<MeasureId> dirtyFlags;     // For incremental layout
 }
 
 class Segment {
   final TickPosition tick;
-  final Map<int, List<Element>> elements;  // Keyed by voice (sparse: not all voices populated)
+  final Map<VoiceId, VoiceSlice> voices;  // Sparse: not all voices populated
 }
 
-// Voice indexing: voices 1-4 per staff, allows sparse population
-// Tuplets and syncopation may leave gaps - this is expected
+class VoiceSlice {
+  final List<NoteLike> elements;  // Notes, chords, rests, grace groups
+}
+
+// NoteLike = Note | Chord | Rest | GraceGroup
+// VoiceSlice keeps the segment from becoming a "semantic junk drawer"
 ```
 
 ### Spanners (Cross-Measure Elements)
@@ -371,7 +425,36 @@ class LayoutResult {
   TickPosition positionToTick(Offset pos, int staff);
   ElementId? hitTest(Offset pos);
 }
+
+// Cache key for layout memoization
+class LayoutCacheKey {
+  final int scoreRevision;
+  final LayoutConstraints constraints;
+}
 ```
+
+### Granular Invalidation
+
+For responsive editing on large scores:
+
+```dart
+class IncrementalLayoutEngine implements LayoutEngine {
+  final Set<MeasureId> _dirtyMeasures = {};
+  LayoutResult? _cached;
+
+  void markDirty(MeasureId id) => _dirtyMeasures.add(id);
+
+  LayoutResult layout(Score score, LayoutConstraints c) {
+    if (_cached != null && _dirtyMeasures.isEmpty) return _cached!;
+
+    // Only recompute affected measures
+    // Propagate to system boundaries if width changes
+    return _incrementalLayout(score, c, _dirtyMeasures);
+  }
+}
+```
+
+This keeps mobile responsive during drag operations.
 
 ### Measure & Staff Layout
 
@@ -544,6 +627,64 @@ Dragging, selecting, and deselecting do not create commands. Only the final comm
 
 ---
 
+## Layer 8: Persistence
+
+Persistence is **command-based**, not snapshot-based.
+
+### Storage Model
+
+```dart
+class ScoreDocument {
+  final ScoreId id;
+  final ScoreMetadata metadata;
+  final List<SerializedCommand> commandLog;  // Full history
+  final Score? snapshot;                      // Optional checkpoint
+  final int snapshotRevision;                 // Revision at snapshot
+}
+
+class SerializedCommand {
+  final String type;           // "AddNote", "AddSlur", etc.
+  final Map<String, dynamic> payload;
+  final DateTime timestamp;
+  final String? authorId;      // For collaboration
+}
+```
+
+### Why Command Log > Score Snapshot
+
+Saving commands instead of (or alongside) score state enables:
+- **Versioning**: Roll back to any point
+- **Recovery**: Reconstruct from partial corruption
+- **Collaboration**: Merge concurrent edits
+- **AI editing history**: Track what was human vs generated
+- **Debugging**: Replay to reproduce bugs
+
+### Rebuild Strategy
+
+```dart
+Score rebuildFromLog(List<SerializedCommand> log, {Score? fromSnapshot}) {
+  var score = fromSnapshot ?? Score.empty();
+  for (final cmd in log.skip(fromSnapshot != null ? snapshotRevision : 0)) {
+    final command = deserializeCommand(cmd);
+    command.apply(score);
+  }
+  return score;
+}
+```
+
+### Snapshot Frequency
+
+Take snapshots periodically (every N commands or on save) for fast load:
+- Load snapshot
+- Apply commands since snapshot
+- Result: full score in milliseconds even with thousands of edits
+
+### Key Invariant
+
+> **Commands are the source of truth. Snapshots are optimization.**
+
+---
+
 ## Technology Stack
 
 ### Flutter Packages
@@ -598,3 +739,6 @@ Dragging, selecting, and deselecting do not create commands. Only the final comm
 7. **Selection is UI state only** - not undoable, not persisted
 8. **Undo is free** - because all mutations are reversible Commands
 9. **Wall-clock timing for playback** - never increment ticks in a timer
+10. **Commands are source of truth** - snapshots are optimization for load speed
+11. **Three-way pitch representation** - Pitch (semantic) + NotatedPitch (display) + PlaybackPitch (MIDI)
+12. **Two-way duration representation** - WrittenDuration (notation) + TickDuration (playback)

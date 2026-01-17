@@ -12,14 +12,15 @@ See `docs/plans/2026-01-17-architecture-design.md` for the complete design.
 
 **Core principle:** "The sheet is a spatial index. The music lives in a semantic model."
 
-**7 Layers:**
+**8 Layers:**
 1. Input (Flutter) - stylus/touch capture
 2. Interpretation (Pure Dart) - stroke → intent
 3. Commands - reversible score mutations
-4. Music Model - Score, Note, Measure, Segment
-5. Layout - tick → pixel conversion
+4. Music Model - Score, Note, Measure, VoiceSlice
+5. Layout - tick → pixel conversion, incremental invalidation
 6. Playback - MIDI synthesis, cursor sync
 7. Selection - ephemeral UI state
+8. Persistence - command log + snapshots
 
 ## Commands
 
@@ -55,20 +56,27 @@ dart format .
 
 ```
 lib/
-├── core/              # Music model (Score, Note, Measure, etc.)
+├── core/              # Music model (Score, Note, Measure, VoiceSlice)
 ├── interpretation/    # Stroke classification, gesture grammar
 ├── commands/          # Reversible score mutations
-├── layout/            # Tick → pixel conversion
+├── layout/            # Tick → pixel conversion, incremental invalidation
 ├── playback/          # MIDI event generation, cursor sync
 ├── selection/         # UI selection state, hit testing
+├── persistence/       # Command log, snapshots, serialization
 └── ui/                # Flutter widgets, CustomPainter rendering
 ```
 
-## Dual Pitch Representation
+## Three-Way Pitch Representation
 
-Always maintain both:
-- `Pitch` (step, alter, octave) - for notation (preserves C# vs Db)
-- `PlaybackPitch` (midiPitch) - for audio
+Always maintain all three:
+- `Pitch` (step, alter, octave) - semantic meaning (C# in any context)
+- `NotatedPitch` (pitch + AccidentalDisplay) - how to engrave it
+- `PlaybackPitch` (midiPitch) - what to play
+
+## Two-Way Duration Representation
+
+- `WrittenDuration` (base, dots, tupletRef) - rhythmic spelling for notation
+- `TickDuration` (int) - actual playback length in ticks
 
 ## Testing Strategy
 
