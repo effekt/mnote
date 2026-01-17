@@ -361,6 +361,62 @@ class VoiceSlice {
 // VoiceSlice keeps the segment from becoming a "semantic junk drawer"
 ```
 
+### Grace Notes
+
+Grace notes have **zero tick duration** - they steal time visually, not temporally:
+
+```dart
+class GraceGroup {
+  final GraceGroupId id;
+  final List<Note> notes;        // The grace notes themselves
+  final NoteId principalNoteId;  // The note they attach to
+  final GraceType type;          // acciaccatura (slashed) vs appoggiatura
+}
+
+enum GraceType { acciaccatura, appoggiatura }
+```
+
+Playback engine handles grace note timing:
+- Acciaccatura: very short, before the beat
+- Appoggiatura: steals time from principal note
+
+Grace notes are **not** in the tick timeline - they're attached to a principal note.
+
+### Beams (Derived, Not Stored)
+
+**Beams are never stored in the score.** They are derived at layout time from:
+- `WrittenDuration` (eighth notes and shorter)
+- Voice context (notes in same voice)
+- Time signature beat groupings
+- Manual beam breaks (stored as a flag on Note, not as a Beam object)
+
+```dart
+class Note {
+  // ...existing fields...
+  final bool forceBeamBreak;  // Only override, not beam itself
+}
+```
+
+This keeps commands clean and prevents beam corruption.
+
+### ID Generation
+
+All entity IDs use **UUID v7** (time-ordered UUIDs):
+
+```dart
+typedef EntityId = String;  // UUID v7 format
+
+// Example: "018e4f8c-5b3a-7000-8000-000000000001"
+// - Time-ordered (sortable)
+// - Unique across devices
+// - Collaboration-safe
+```
+
+UUID v7 chosen for:
+- Chronological ordering (useful for command logs)
+- No coordination needed between devices
+- Human-debuggable (timestamp visible in prefix)
+
 ### Spanners (Cross-Measure Elements)
 
 ```dart
@@ -728,6 +784,48 @@ Take snapshots periodically (every N commands or on save) for fast load:
 
 ---
 
+## Known Non-Goals
+
+These are explicitly **out of scope** to protect the architecture:
+
+### Not a DAW
+- No multi-track audio recording
+- No waveform editing
+- No mixing console
+- No VST/AU plugin hosting
+
+MNote is a **notation app with playback**, not a recording studio.
+
+### Not a Tablature Editor
+- No guitar tab notation
+- No fretboard diagrams
+- Stick to standard Western notation (treble, bass, percussion)
+
+### Not Real-Time Collaborative Editing (Phase 1-3)
+- Command log enables future collaboration
+- But no WebSocket sync, conflict resolution, or presence indicators in MVP
+- Treat this as a single-user app that *could* sync later
+
+### Not a Music Theory Tutor
+- No chord analysis display
+- No Roman numeral annotations
+- No automatic voice leading suggestions
+- AI composition features are *generative*, not *analytical*
+
+### Not a MusicXML/MIDI Editor
+- Import/export: yes
+- But the internal model is **not** MusicXML-shaped
+- Don't contort the architecture to match external formats
+
+### Not Pixel-Perfect Engraving (Phase 1-2)
+- Proportional spacing: yes
+- But no optical spacing adjustments
+- No collision avoidance algorithms
+- No manual micro-positioning
+- "Good enough to read" before "publication quality"
+
+---
+
 ## Appendix: Key Invariants
 
 1. **Interpretation never mutates the score** - only Commands do
@@ -742,3 +840,6 @@ Take snapshots periodically (every N commands or on save) for fast load:
 10. **Commands are source of truth** - snapshots are optimization for load speed
 11. **Three-way pitch representation** - Pitch (semantic) + NotatedPitch (display) + PlaybackPitch (MIDI)
 12. **Two-way duration representation** - WrittenDuration (notation) + TickDuration (playback)
+13. **Grace notes have zero tick duration** - playback engine handles timing
+14. **Beams are derived, never stored** - computed from duration + voice context
+15. **UUID v7 for all entity IDs** - time-ordered, collaboration-safe
